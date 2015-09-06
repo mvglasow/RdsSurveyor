@@ -28,6 +28,8 @@ package eu.jacquet80.rds.app.oda;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.GregorianCalendar;
 import java.util.HashMap;
@@ -71,6 +73,7 @@ public class AlertC extends ODA {
 	
 	private Map<Integer, OtherNetwork> otherNetworks = new HashMap<Integer, OtherNetwork>();
 	private List<Message> messages = new ArrayList<Message>();
+	private Comparator<Message> messageComparator = new DefaultComparator();
 	private Message currentMessage;
 	private Bitstream multiGroupBits;
 
@@ -318,6 +321,7 @@ public class AlertC extends ODA {
 			// (unless it is a cancellation message)
 			if(! currentMessage.isCancellation()) {
 				messages.add(currentMessage);
+				Collections.sort(messages, messageComparator);
 			}
 			
 			currentMessage.updateCount = oldUpdate + 1;
@@ -382,6 +386,22 @@ public class AlertC extends ODA {
 	
 	public Set<String> getONInfo() {
 		return onInfo;
+	}
+	
+	/**
+	 * @brief Sets a new comparator, which will be used to sort the list of messages.
+	 * 
+	 * Setting a new comparator causes the list to be sorted with the new comparator and registered
+	 * change listeners to fire.
+	 * 
+	 * @param comparator The new comparator
+	 */
+	public void setComparator(Comparator<Message> comparator) {
+		if (comparator != messageComparator) {
+			messageComparator = comparator;
+			Collections.sort(messages, messageComparator);
+			fireChangeListeners();
+		}
 	}
 	
 	private static class Bitstream {
@@ -836,10 +856,11 @@ public class AlertC extends ODA {
 		
 		public String html() {
 			if(! complete) {
-				return "Incomplete!";
+				return "<html><b>Incomplete!</b><html>";
 			}
 			StringBuilder res = new StringBuilder("<html>");
 			if (locationInfo != null) {
+				res.append("<b>");
 				String tmp = this.getRoadNumber();
 				if (tmp != null)
 					res.append(tmp);
@@ -860,6 +881,7 @@ public class AlertC extends ODA {
 						tmp = name;
 					res.append(name);
 				}
+				res.append("</b>");
 				res.append("<br/>");
 			}
 			res.append("CC: ").append(String.format("%X", cc));
@@ -942,6 +964,21 @@ public class AlertC extends ODA {
 			return res.toString();			
 		}
 		
+		
+		/**
+		 * @brief Returns the name of the area surrounding the location.
+		 * 
+		 * For formatting of the area name, see
+		 * {@link eu.jacquet80.rds.app.oda.tmc.TMCLocation#getAreaName()}.
+		 * 
+		 * @return The area name, or {@code null} if the location of the message could not be
+		 * resolved.
+		 */
+		public String getAreaName() {
+			if (locationInfo == null)
+				return null;
+			return locationInfo.getAreaName();
+		}
 		
 		/**
 		 * @brief Returns the auxiliary coordinates of the message location.
@@ -1234,6 +1271,32 @@ public class AlertC extends ODA {
 				return secondary.name1.name;
 		}
 		
+		/**
+		 * @brief Returns a short display name for the location.
+		 * 
+		 * The short display name is intended for use in list views. It identifies the approximate
+		 * location of the event. It can take one of the following forms (the first non-empty item
+		 * is returned):
+		 * <ol>
+		 * <li>Road number</li>
+		 * <li>Area name (for roads without a number)</li>
+		 * <li>The value returned by {@link #getDisplayName()}</li>
+		 * </ol>
+		 * 
+		 * @return The short display name, or {@code null} if the location of the message could not
+		 * be resolved.
+		 */
+		public String getShortDisplayName() {
+			if (locationInfo == null)
+				return null;
+			String ret = locationInfo.getRoadNumber();
+			if (ret == null)
+				ret = locationInfo.getAreaName();
+			if (ret == null)
+				ret = getDisplayName();
+			return ret;
+		}
+		
 		public int getLocation() {
 			return location;
 		}
@@ -1510,7 +1573,7 @@ public class AlertC extends ODA {
 			} else {
 				text = tmcEvent.text;
 			}
-			StringBuffer res = new StringBuffer("[").append(tmcEvent.code).append("] ").append(text);
+			StringBuffer res = new StringBuffer("[").append(tmcEvent.code).append("] <b>").append(text).append("</b/>");
 			res.append(", urgency=").append(urgency);
 			res.append(", nature=").append(nature);
 			res.append(", durationType=").append(durationType);
@@ -1530,6 +1593,60 @@ public class AlertC extends ODA {
 				this.durationType = EventDurationType.LONGER_LASTING;
 			else
 				this.durationType = EventDurationType.DYNAMIC;
+		}
+	}
+	
+	/**
+	 * @brief The default comparator for sorting TMC messages.
+	 * 
+	 * This comparator compares events, using the following items of information in the order
+	 * shown, until a difference is found:
+	 * <ol>
+	 * <li>Road numbers</li>
+	 * <li>Area names</li>
+	 * <li>Location IDs</li>
+	 * <li>Extents</li>
+	 * </ol>
+	 * 
+	 * Road numbers and area names are sorted lexicographically. Null values are placed at the end,
+	 * two null values are considered equal (causing the next items in the above list to be
+	 * examined). Location IDs and extents are sorted numerically. 
+	 */
+	public static class DefaultComparator implements Comparator<Message> {
+		@Override
+		public int compare(Message lhs, Message rhs) {
+			int res = 0;
+			/* First compare by a road numbers (if only one location has a road number, it is first) */
+			String lrn = lhs.getRoadNumber();
+			String rrn = rhs.getRoadNumber();
+			if ((lrn != null) && (rrn != null)) {
+				res = lrn.compareTo(rrn);
+				if (res != 0)
+					return res;
+			} else if (lrn != null)
+				return -1;
+			else if (rrn != null)
+				return 1;
+			
+			/* Then compare by area names (if only one location has an area name, it is first) */
+			String lan = lhs.getAreaName();
+			String ran = rhs.getAreaName();
+			if ((lan != null) && (ran != null)) {
+				res = lan.compareTo(ran);
+				if (res != 0)
+					return res;
+			} else if (lan != null)
+				return -1;
+			else if (ran != null)
+				return 1;
+			
+			/* Then compare by primary location codes */
+			res = lhs.location - rhs.location;
+			if (res != 0)
+				return res;
+			
+			/* Finally compare by extent */
+			return lhs.extent - rhs.extent;
 		}
 	}
 }
