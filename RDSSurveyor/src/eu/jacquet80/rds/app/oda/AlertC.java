@@ -147,7 +147,7 @@ public class AlertC extends ODA {
 					int event = blocks[2] & 0x7FF;
 					int location = blocks[3];
 					console.print("DP=" + dp + ", DIV=" + div + ", DIR=" + dir + ", ext=" + extent + ", evt=" + event + ", loc=" + location);
-					currentMessage = new Message(dir, extent, event, location, cc, ltn, date, station.getTimeZone(), div == 1, dp);
+					currentMessage = new Message(dir, extent, event, location, cc, ltn, sid, date, station.getTimeZone(), div == 1, dp);
 					
 					// single-group message is complete
 					currentMessage.complete();
@@ -175,7 +175,7 @@ public class AlertC extends ODA {
 							int location = blocks[3];
 							console.print("dir=" + dir + ", ext=" + extent + ", evt=" + event + ", loc=" + location);
 
-							currentMessage = new Message(dir, extent, event, location, cc, ltn, date, station.getTimeZone());
+							currentMessage = new Message(dir, extent, event, location, cc, ltn, sid, date, station.getTimeZone());
 							multiGroupBits = new Bitstream();
 							currentContIndex = idx;
 							nextGroupExpected = 2;
@@ -466,6 +466,8 @@ public class AlertC extends ODA {
 		private final int cc;
 		/** The Location Table Number (LTN). */
 		private final int ltn;
+		/** The Service ID (SID). */
+		private final int sid;
 		/** The raw location code. */
 		private final int location;
 		/** The resolved location, if the location is contained in a previously loaded TMC location table. */
@@ -551,14 +553,16 @@ public class AlertC extends ODA {
 		 * @param location
 		 * @param cc
 		 * @param ltn
+		 * @param sid
 		 */
-		public Message(int direction, int extent, int eventCode, int location, int cc, int ltn, Date date, TimeZone tz) {
+		public Message(int direction, int extent, int eventCode, int location, int cc, int ltn, int sid, Date date, TimeZone tz) {
 			this.direction = direction;
 			this.extent = extent;
 			this.date = date;
 			this.timeZone = tz;
 			this.cc = cc;
 			this.ltn = ltn;
+			this.sid = sid;
 			this.location = location;
 			this.locationInfo = TMC.getLocation(String.format("%X", cc), ltn, location);
 			addInformationBlock(eventCode);
@@ -575,11 +579,12 @@ public class AlertC extends ODA {
 		 * @param location
 		 * @param cc
 		 * @param ltn
+		 * @param sid
 		 * @param diversion
 		 * @param duration
 		 */
-		public Message(int direction, int extent, int eventCode, int location, int cc, int ltn, Date date, TimeZone tz, boolean diversion, int duration) {
-			this(direction, extent, eventCode, location, cc, ltn, date, tz);
+		public Message(int direction, int extent, int eventCode, int location, int cc, int ltn, int sid, Date date, TimeZone tz, boolean diversion, int duration) {
+			this(direction, extent, eventCode, location, cc, ltn, sid, date, tz);
 			this.diversion = diversion;
 			this.duration = duration;
 			this.eventForDuration = this.currentInformationBlock.currentEvent;
@@ -1060,6 +1065,8 @@ public class AlertC extends ODA {
 		public float[] getCoordinates() {
 			float[] c1, c2;
 			// TODO do we need to deal with extent changes?
+			if (locationInfo == null)
+				return null;
 			if (coords == null) {
 				if (direction == 0)
 					c1 = locationInfo.getFirstCoordinates();
@@ -1105,6 +1112,15 @@ public class AlertC extends ODA {
 				return null;
 			TMCLocation secondary = locationInfo.getOffset(this.extent, this.direction);
 			return locationInfo.getDisplayName(secondary, this.direction);
+		}
+		
+		/**
+		 * @brief Returns the PID country code for the event (single hex digit).
+		 * 
+		 * @return the country code, or -1 if unknown
+		 */
+		public int getCountryCode() {
+			return cc;
 		}
 		
 		/**
@@ -1193,7 +1209,7 @@ public class AlertC extends ODA {
 			if (!(locationInfo instanceof TMCPoint))
 				return null;
 			TMCPoint loc = (TMCPoint) locationInfo;
-			if (!loc.junctionNumber.isEmpty())
+			if ((loc.junctionNumber != null) && !loc.junctionNumber.isEmpty())
 				return loc.junctionNumber;
 			else
 				return null;
@@ -1244,7 +1260,7 @@ public class AlertC extends ODA {
 			if (!(secondary instanceof TMCPoint))
 				return null;
 			TMCPoint loc = (TMCPoint) secondary;
-			if (!loc.junctionNumber.isEmpty())
+			if ((loc.junctionNumber != null) && !loc.junctionNumber.isEmpty())
 				return loc.junctionNumber;
 			else
 				return null;
@@ -1297,8 +1313,19 @@ public class AlertC extends ODA {
 			return ret;
 		}
 		
+		public int getSid() {
+			return sid;
+		}
+		
 		public int getLocation() {
 			return location;
+		}
+		
+		/**
+		 * @brief Returns the Location Table Number (LTN) for this event.
+		 */
+		public int getLocationTableNumber() {
+			return ltn;
 		}
 		
 		public List<Integer> getEvents() {
@@ -1315,6 +1342,29 @@ public class AlertC extends ODA {
 		
 		public int getUpdateCount() {
 			return updateCount;
+		}
+		
+		/**
+		 * @brief Returns whether the message affects both directions.
+		 */
+		public boolean isBidirectional() {
+			return bidirectional;
+		}
+		
+		/**
+		 * @brief Returns whether message information is complete.
+		 * 
+		 * This method currently checks for a valid CC and LTN and a fully resolved location.
+		 */
+		public boolean isComplete() {
+			return ((cc >= 0) && (ltn >= 0) && (sid >= 0) && (locationInfo != null));
+		}
+		
+		/**
+		 * @brief Returns whether a diversion route is available.
+		 */
+		public boolean isDiversionAvailable() {
+			return diversion;
 		}
 	}
 	
