@@ -748,28 +748,68 @@ public class AlertC extends ODA {
 			this.complete = true;
 		}
 		
+		/**
+		 * @brief Whether this message overrides another message.
+		 * 
+		 * A message overrides another if the following are true:
+		 * <ul>
+		 * <li>Both messages refer to the same location, from the same location table for the same
+		 * country</li>
+		 * <li>The directions of both messages match</li>
+		 * <li>At least one update class is shared by events from both messages</li>
+		 * <li>For forecast messages, the forecast duration matches</li>
+		 * <li>The new message is complete</li>
+		 * </ul>
+		 * 
+		 * Special rules apply to the {@link #LOCATION_INDEPENDENT} location code, which matches
+		 * any location code for the purpose of message updating. A regular (non-INTER-ROAD)
+		 * message with this location code will replace all otherwise matching messages, including
+		 * those referring to an INTER-ROAD location. An INTER-ROAD message with this location code
+		 * will only replace messages referring to locations from the same location table and
+		 * country, even if they are non-INTER-ROAD messages.
+		 * 
+		 * These checks are implemented here.
+		 * 
+		 * In addition to the above, both messages must either originate from the same TMC service
+		 * (identified by CC, LTN and SID) or from two different TMC services which explicitly
+		 * allow overriding each other's messages via variant 9 tuning information messages. This
+		 * check is not implemented here; callers who receive messages from multiple services must
+		 * implement this check separately.
+		 * 
+		 * @param m A previously received message
+		 * 
+		 * @return True if the message can be overridden (save for the aforementioned service constraints not being met), false if not
+		 */
 		public boolean overrides(Message m) {
-			return // FIXME: check cc and ltn
-				(location == m.location || location == LOCATION_INDEPENDENT) &&
+			return
+				complete &&
+				hasLocationMatching(m) && 
 				(direction == m.direction) &&
 				hasAnEventFromTheSameUpdateClassAs(m) &&
-				(!isForecastMessage() || duration == m.duration);
+				((!isForecastMessage() && !m.isForecastMessage()) || duration == m.duration);
 				// is forecast message => same duration
 		}
 		
 		/**
 		 * As per TMC/Alert-C standard, "contains an event that belongs to the
 		 * same update class as any event (a multi-group message may have more
-		 * than one event) in the existing message)"
+		 * than one event) in the existing message)".
 		 * 
-		 * @param m
+		 * If the class for which this method is called has event 2047 (null message), this method
+		 * will also return true. However, the opposite is not true: if the message passed as
+		 * {@code m} has event 2047, it will be treated like any other event.
+		 * 
+		 * @param m The message to override in case of a match
+		 * 
 		 * @return
 		 */
 		private boolean hasAnEventFromTheSameUpdateClassAs(Message m) {
-			for(InformationBlock mib : m.informationBlocks) {
-				for(Event me : mib.events) {
-					for(InformationBlock ib : this.informationBlocks) {
-						for(Event e : ib.events) {
+			for(InformationBlock ib : this.informationBlocks) {
+				for(Event e : ib.events) {
+					if (e.tmcEvent.code == 2047)
+						return true;
+					for(InformationBlock mib : m.informationBlocks) {
+						for(Event me : mib.events) {
 							if(me.tmcEvent.updateClass == e.tmcEvent.updateClass) {
 								return true;
 							}
@@ -778,6 +818,33 @@ public class AlertC extends ODA {
 				}
 			}
 			return false;
+		}
+		
+		/**
+		 * @brief Whether the location of this message matches that of another for the purpose of message updating
+		 * 
+		 * @param m The message to override in case of a match
+		 * 
+		 * @return
+		 */
+		private boolean hasLocationMatching(Message m) {
+			if ((location == LOCATION_INDEPENDENT) && (!interroad))
+					return true;
+			/* 
+			 * Messages received before we had full service info may have -1 as CC and/or LTN
+			 * (FCC and FLTN only if they are not INTER-ROAD messages).
+			 * We consider these equal to the main CC/LTN of the service.
+			 */
+			int mfcc = m.fcc;
+			int mfltn = m.fltn;
+			if (!interroad) {
+				if (mfcc < 0)
+					mfcc = fcc;
+				if (mfltn < 0)
+					mfltn = fltn;
+			}
+			return ((fcc == mfcc) && (fltn == mfltn) &&
+					((location == m.location) || (location == LOCATION_INDEPENDENT)));
 		}
 		
 		/**
@@ -1158,12 +1225,28 @@ public class AlertC extends ODA {
 		}
 		
 		/**
-		 * @brief Returns the PID country code for the event (single hex digit).
+		 * @brief Returns the PID country code for this event (single hex digit).
+		 * 
+		 * This is the country code of the service which sent this event. For an INTER-ROAD
+		 * message, the country code of the location may differ and can be retrieved using
+		 * {@link #getForeignCountryCode()}.
 		 * 
 		 * @return the country code, or -1 if unknown
 		 */
 		public int getCountryCode() {
 			return cc;
+		}
+		
+		/**
+		 * @brief Returns the country code for the location of this event (single hex digit).
+		 * 
+		 * For an INTER-ROAD message, the country code of the service which sent this event may
+		 * differ and can be retrieved using {@link #getCountryCode()}.
+		 * 
+		 * @return the country code, or -1 if unknown
+		 */
+		public int getForeignCountryCode() {
+			return fcc;
 		}
 		
 		/**
@@ -1365,7 +1448,22 @@ public class AlertC extends ODA {
 		}
 		
 		/**
+		 * @brief Returns the Location Table Number (LTN) for the location of this event.
+		 * 
+		 * This is the LTN of the location table in which the location is defined. For an
+		 * INTER-ROAD message, the LTN of the service which sent this event may differ and can be
+		 * retrieved using {@link #getLocationTableNumber()}.
+		 */
+		public int getForeignLocationTableNumber() {
+			return fltn;
+		}
+		
+		/**
 		 * @brief Returns the Location Table Number (LTN) for this event.
+		 * 
+		 * This is the LTN of the service which sent this event. For an INTER-ROAD message, the
+		 * location may refer to a different location table, which can be retrieved using
+		 * {@link #getForeignLocationTableNumber()}.
 		 */
 		public int getLocationTableNumber() {
 			return ltn;
