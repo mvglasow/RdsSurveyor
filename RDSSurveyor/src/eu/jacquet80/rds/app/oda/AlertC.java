@@ -72,7 +72,7 @@ public class AlertC extends ODA {
 	 * You may wish to store this value in (or along with) your database and compare it on startup.
 	 * If the versions do not match, reinitialize your local database. 
 	 */
-	private static final int dbVersion = 1;
+	public static final int DB_VERSION = 1;
 	/** 
 	 * SQL statements for persistent storage of TMC messages.
 	 * 
