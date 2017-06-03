@@ -1669,6 +1669,13 @@ public class AlertC extends ODA {
 			return result;
 		}
 		
+		/**
+		 * @brief Returns the date and time at which this message was received.
+		 */
+		public Date getTimestamp() {
+			return (Date) date.clone();
+		}
+		
 		public int getUpdateCount() {
 			return updateCount;
 		}
