@@ -2218,6 +2218,11 @@ public class AlertC extends ODA {
 		}
 
 
+		public int getQuantifier() {
+			return quantifier;
+		}
+
+
 		/**
 		 * @brief Writes an event to persistent storage.
 		 * 
