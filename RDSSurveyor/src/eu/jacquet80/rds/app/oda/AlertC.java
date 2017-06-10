@@ -659,12 +659,12 @@ public class AlertC extends ODA {
 		}
 		
 		private void addInformationBlock(int eventCode) {
-			this.currentInformationBlock = new InformationBlock(eventCode);
+			this.currentInformationBlock = new InformationBlock(this, eventCode);
 			this.informationBlocks.add(currentInformationBlock);			
 		}
 
 		private void addInformationBlock() {
-			this.currentInformationBlock = new InformationBlock();
+			this.currentInformationBlock = new InformationBlock(this);
 			this.informationBlocks.add(currentInformationBlock);			
 		}
 		
@@ -852,7 +852,7 @@ public class AlertC extends ODA {
 				//addInformationBlock();
 				// TODO the spec says we should maybe create a new information block
 				// also, a 11 may be followed only by a 6 (sup info)
-				currentInformationBlock.destination = value;
+				currentInformationBlock.setDestination(value);
 				break;
 				
 			case 10:
@@ -1857,7 +1857,7 @@ public class AlertC extends ODA {
 			stmt.setInt(1, dbId);
 			ResultSet rsetI = stmt.executeQuery();
 			while (rsetI.next()) {
-				this.currentInformationBlock = new InformationBlock(rsetI, dbInfo);
+				this.currentInformationBlock = new InformationBlock(this, rsetI, dbInfo);
 				this.informationBlocks.add(currentInformationBlock);
 			}
 			if (currentInformationBlock == null)
@@ -2014,28 +2014,35 @@ public class AlertC extends ODA {
 		/** Primary key for persistent storage, -1 if no corresponding DB record exists */
 		private int dbId = -1;
 		
+		/** The enclosing TMC message */
+		private Message message;
+		
 		private int length = -1;
 		private int speed = -1;
 		private int destination = -1;
+		private TMCLocation destinationInfo = null;
 
 		private final List<Event> events = new ArrayList<Event>();
 		private Event currentEvent;
 		
 		private final List<Integer> diversionRoute = new ArrayList<Integer>();
 
-		public InformationBlock(int eventCode) {
+		public InformationBlock(Message message, int eventCode) {
+			this.message = message;
 			addEvent(eventCode);
 		}
 		
-		public InformationBlock() {
+		public InformationBlock(Message message) {
+			this.message = message;
 			this.currentEvent = null;
 		}
 		
-		public InformationBlock(ResultSet rset, MessageDbInfo dbInfo) throws SQLException {
+		public InformationBlock(Message message, ResultSet rset, MessageDbInfo dbInfo) throws SQLException {
+			this.message = message;
 			this.dbId = rset.getInt("id");
 			this.length = rset.getInt("length");
 			this.speed = rset.getInt("speed");
-			this.destination = rset.getInt("destination");
+			this.setDestination(rset.getInt("destination"));
 			
 			/* get events */
 			PreparedStatement stmtE = dbInfo.connection.prepareStatement(String.format("select * from %s where informationBlock = ? order by index", dbInfo.event));
@@ -2060,6 +2067,33 @@ public class AlertC extends ODA {
 			}
 			rsetD.close();
 			stmtD.close();
+		}
+		
+		/**
+		 * @brief Returns the destination information.
+		 * 
+		 * @return The location for the destination, or null if no destination is specified or if
+		 * the location code cannot be resolved.
+		 */
+		public TMCLocation getDestination() {
+			return destinationInfo;
+		}
+		
+		/**
+		 * @brief Returns the locations which make up the diversion route.
+		 * 
+		 * @return A list of locations. An empty list is returned if no diversion is specified or
+		 * if one or more location codes cannot be resolved.
+		 */
+		public List<TMCLocation> getDiversion() {
+			List<TMCLocation> res = new LinkedList<TMCLocation>();
+			for (int lcid : diversionRoute) {
+				TMCLocation location = TMC.getLocation(String.format("%X", message.fcc), message.fltn, lcid);
+				if (location == null)
+					return new LinkedList<TMCLocation>();
+				res.add(location);
+			}
+			return res;
 		}
 
 		/**
@@ -2167,11 +2201,24 @@ public class AlertC extends ODA {
 			events.add(this.currentEvent);		
 		}
 		
+		/**
+		 * @param destination the destination to set
+		 */
+		private void setDestination(int destination) {
+			this.destination = destination;
+			this.destinationInfo = TMC.getLocation(String.format("%X", message.fcc), message.fltn, destination);
+		}
+
 		@Override
 		public String toString() {
 			StringBuilder res = new StringBuilder();
 			res.append("-------------\n");
-			if(destination != -1) res.append("For destination: " + destination + "  ");
+			if (destination != -1) {
+				res.append("For destination: " + destination + "  ");
+				TMCLocation location = getDestination();
+				if (location != null)
+					res.append(location).append("\n");
+			}
 			
 			if(length != -1) {
 				String lengthKM;
@@ -2187,6 +2234,15 @@ public class AlertC extends ODA {
 			}
 			
 			if(diversionRoute.size() > 0) res.append("Diversion route: " + diversionRoute).append('\n');
+			if (diversionRoute.size() > 0) {
+				res.append("Diversion route: " + diversionRoute).append("\n");
+				for (int lcid : diversionRoute) {
+					res.append("#").append(lcid);
+					TMCLocation location = TMC.getLocation(String.format("%X", message.fcc), message.fltn, lcid);
+					if (location != null)
+						res.append(location).append("\n");
+				}
+			}
 			
 			return res.toString();
 		}
@@ -2194,7 +2250,12 @@ public class AlertC extends ODA {
 		public String html() {
 			StringBuilder res = new StringBuilder();
 			res.append("<hr>");
-			if(destination != -1) res.append("For destination: " + destination + "  ");
+			if (destination != -1) {
+				res.append("For destination: " + destination + "  ");
+				TMCLocation location = getDestination();
+				if (location != null)
+					res.append("<blockquote>").append(location.html()).append("</blockquote>");
+			}
 			
 			if(length != -1) {
 				String lengthKM;
@@ -2209,7 +2270,16 @@ public class AlertC extends ODA {
 				res.append(e.html()).append("<br>");
 			}
 			
-			if(diversionRoute.size() > 0) res.append("Diversion route: " + diversionRoute).append("<br>");
+			if (diversionRoute.size() > 0) {
+				res.append("Diversion route: " + diversionRoute).append("<br><ul>");
+				for (int lcid : diversionRoute) {
+					res.append("<li>").append(lcid);
+					TMCLocation location = TMC.getLocation(String.format("%X", message.fcc), message.fltn, lcid);
+					if (location != null)
+						res.append("<blockquote>").append(location.html()).append("</blockquote>");
+				}
+				res.append("</ul>");
+			}
 			
 			return res.toString();			
 		}
