@@ -1159,6 +1159,8 @@ public class AlertC extends ODA {
 			res.append("CC: ").append(String.format("%X", fcc));
 			res.append(", LTN: ").append(fltn);
 			res.append(", Location: ").append(location);
+			if (encrypted)
+				res.append(" (encrypted)");
 			res.append(", extent=" + this.extent);
 			res.append(", ").append(this.bidirectional ? "bi" : "mono").append("directional");
 			res.append(", growth direction ").append(this.direction == 0 ? "+" : "-");
@@ -1249,6 +1251,8 @@ public class AlertC extends ODA {
 			res.append("CC: ").append(String.format("%X", fcc));
 			res.append(", LTN: ").append(fltn);
 			res.append(", Location: ").append(location);
+			if (encrypted)
+				res.append(" (encrypted)");
 			res.append(", extent=" + this.extent);
 			res.append(", ").append(this.bidirectional ? "bi" : "mono").append("directional");
 			res.append(", growth direction ").append(this.direction == 0 ? "+" : "-");
