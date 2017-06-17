@@ -1875,7 +1875,7 @@ public class AlertC extends ODA {
 		 */
 		public int store(MessageDbInfo dbInfo, boolean commit) throws SQLException {
 			PreparedStatement stmt = dbInfo.connection.prepareStatement(String.format(
-					"insert into %s (direction, extent, date, timeZone, cc, ltn, sid, interroad, fcc, fltn, location, encrypted, reversedDirectionality, reversedDurationType, duration, startTime, stopTime, increasedUrgency, spoken, diversion, updateCount) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+					"insert into %s (direction, extent, date, timeZone, cc, ltn, sid, interroad, fcc, fltn, location, encrypted, reversedDirectionality, reversedDurationType, duration, startTime, stopTime, increasedUrgency, spoken, diversion, updateCount) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 					dbInfo.message),
 					Statement.RETURN_GENERATED_KEYS);
 			
