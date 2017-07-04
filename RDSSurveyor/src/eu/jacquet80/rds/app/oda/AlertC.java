@@ -120,6 +120,7 @@ public class AlertC extends ODA {
 	private Boolean encrypted = false; // whether the service is encrypted
 	
 	private Map<Integer, TMCOtherNetwork> otherNetworks = Collections.synchronizedMap(new HashMap<Integer, TMCOtherNetwork>());
+	private MessageBuilder builder = new MessageBuilder();
 	private List<Message> messages = new ArrayList<Message>();
 	private Comparator<Message> messageComparator = new DefaultComparator();
 	private Message currentMessage;
@@ -232,11 +233,21 @@ public class AlertC extends ODA {
 					int event = blocks[2] & 0x7FF;
 					int location = blocks[3];
 					console.print("DP=" + dp + ", DIV=" + div + ", DIR=" + dir + ", ext=" + extent + ", evt=" + event + ", loc=" + location);
-					currentMessage = new Message(dir, extent, event, location, cc, ltn, sid, date, station.getTimeZone(), Boolean.TRUE.equals(encrypted), div == 1, dp);
-					
-					// single-group message is complete
-					currentMessage.complete();
-					messageJustCompleted = true;
+					try {
+						builder.reset();
+						builder.setServiceInfo(cc, ltn, sid, station.getTimeZone(), Boolean.TRUE.equals(encrypted));
+						builder.setDirection(dir);
+						builder.setExtent(extent);
+						builder.setLocation(location);
+						builder.setDate(date);
+						builder.setDiversion(div == 1);
+						builder.addEvent(event);
+						builder.setDuration(dp);
+						currentMessage = builder.build();
+						messageJustCompleted = true;
+					} catch (IllegalStateException e) {
+						e.printStackTrace();
+					}
 					
 					// reset "expected" indicators
 					currentContIndex = -1;
@@ -264,7 +275,19 @@ public class AlertC extends ODA {
 							int location = blocks[3];
 							console.print("dir=" + dir + ", ext=" + extent + ", evt=" + event + ", loc=" + location);
 
-							currentMessage = new Message(dir, extent, event, location, cc, ltn, sid, date, station.getTimeZone(), Boolean.TRUE.equals(encrypted));
+							builder.reset();
+							try {
+								builder.setServiceInfo(cc, ltn, sid, station.getTimeZone(), Boolean.TRUE.equals(encrypted));
+								builder.setDirection(dir);
+								builder.setExtent(extent);
+								builder.setLocation(location);
+								builder.setDate(date);
+								builder.addEvent(event);
+							} catch (IllegalStateException e) {
+								e.printStackTrace();
+							}
+
+							//currentMessage = new Message(dir, extent, event, location, cc, ltn, sid, date, station.getTimeZone(), Boolean.TRUE.equals(encrypted));
 							multiGroupBits = new Bitstream();
 							currentContIndex = idx;
 							nextGroupExpected = 2;
@@ -286,6 +309,7 @@ public class AlertC extends ODA {
 									console.printf(" ignoring, bad continuity index (was %d), probably missed groups", currentContIndex);
 									currentContIndex = -1;
 									nextGroupExpected = -1;
+									builder.reset();
 								} else if(groupNumber != nextGroupExpected) {
 									console.print(" ignoring, next expected is #" + nextGroupExpected);
 								} else {
@@ -299,7 +323,7 @@ public class AlertC extends ODA {
 
 									console.print(" [" + multiGroupBits + "] ");
 									
-									if ((second == 1) && (currentMessage.interroad)) {
+									if ((second == 1) && (builder.isInterroad())) {
 										/* 
 										 * Second group of an INTER-ROAD message.
 										 * Free bits are preceded by 16 bits location code.
@@ -309,7 +333,7 @@ public class AlertC extends ODA {
 										 * state that free format bits start at Z11, immediately
 										 * after the location code. 
 										 */
-										currentMessage.setLocation(multiGroupBits.take(16));
+										builder.setLocation(multiGroupBits.take(16));
 									}
 
 									while(multiGroupBits.count() >= 4) {
@@ -321,7 +345,11 @@ public class AlertC extends ODA {
 											int value = multiGroupBits.take(Message.labelSizes[label]);
 											if(!(label == 0 && value == 0)) {
 												console.print(label + "->" + value + ", ");
-												currentMessage.addField(label, value);
+												try {
+													builder.addField(label, value);
+												} catch (IllegalStateException e) {
+													e.printStackTrace();
+												}
 											} else {
 												console.print("EOM");
 												break;
@@ -332,8 +360,12 @@ public class AlertC extends ODA {
 								
 								// message is complete if no remaining group
 								if(remaining == 0) {
-									currentMessage.complete();
-									messageJustCompleted = true;
+									try {
+										currentMessage = builder.build();
+										messageJustCompleted = true;
+									} catch (IllegalStateException e) {
+										e.printStackTrace();
+									}
 								}
 								
 							} else {  /* if nextGroupExpected = -1 */
@@ -725,16 +757,6 @@ public class AlertC extends ODA {
 			return rset;
 		}
 		
-		private void addInformationBlock(int eventCode) {
-			this.currentInformationBlock = new InformationBlock(this, eventCode);
-			this.informationBlocks.add(currentInformationBlock);			
-		}
-
-		private void addInformationBlock() {
-			this.currentInformationBlock = new InformationBlock(this);
-			this.informationBlocks.add(currentInformationBlock);			
-		}
-		
 		private String formatTime(int time) {
 			if(time >= 0 && time <= 95) {
 				return String.format("%02d:%02d", time / 4, (time % 4) * 15);
@@ -747,67 +769,6 @@ public class AlertC extends ODA {
 			} else {
 				return "INVALID";
 			}
-		}
-		
-		/**
-		 * @brief Creates a new TMC/ALERT-C message.
-		 * 
-		 * This constructor is intended for multi-group messages, which have no fixed fields for
-		 * diversion and duration. Instead, default values (duration 0, no diversion) are assumed
-		 * unless one of the optional fields in the subsequent messages of the group sets a
-		 * different value.
-		 * 
-		 * @param direction
-		 * @param extent
-		 * @param eventCode
-		 * @param location
-		 * @param cc
-		 * @param ltn
-		 * @param sid
-		 */
-		public Message(int direction, int extent, int eventCode, int location, int cc, int ltn, int sid, Date date, TimeZone tz, boolean encrypted) {
-			this.direction = direction;
-			this.extent = extent;
-			this.date = date;
-			this.timeZone = tz;
-			this.encrypted = encrypted;
-			this.cc = cc;
-			this.ltn = ltn;
-			this.sid = sid;
-			if ((location < LOCATION_INTER_ROAD) || (location >= LOCATION_ALL_LISTENERS)) {
-				interroad = false;
-				fcc = cc;
-				fltn = ltn;
-			} else {
-				interroad = true;
-				fcc = (location >> 6) & 0xF;
-				fltn = location & 0x3F;
-			}
-			this.setLocation(location);
-			addInformationBlock(eventCode);
-		}
-		
-		/**
-		 * @brief Creates a new TMC/ALERT-C message.
-		 * 
-		 * This constructor is intended for single-group messages, which have fields for diversion and duration.
-		 * 
-		 * @param direction
-		 * @param extent
-		 * @param eventCode
-		 * @param location
-		 * @param cc
-		 * @param ltn
-		 * @param sid
-		 * @param diversion
-		 * @param duration
-		 */
-		public Message(int direction, int extent, int eventCode, int location, int cc, int ltn, int sid, Date date, TimeZone tz, boolean encrypted, boolean diversion, int duration) {
-			this(direction, extent, eventCode, location, cc, ltn, sid, date, tz, encrypted);
-			this.diversion = diversion;
-			this.duration = duration;
-			this.durationType = this.currentInformationBlock.currentEvent.durationType;
-			this.nature = this.currentInformationBlock.currentEvent.nature;
 		}
 		
 		/**
@@ -907,88 +868,6 @@ public class AlertC extends ODA {
 				ib.accept(visitor);
 		}
 
-		public void addField(int label, int value) {
-			switch(label) {
-			// duration
-			case 0:
-				duration = value;
-				this.durationType = this.currentInformationBlock.currentEvent.durationType;
-				this.nature = this.currentInformationBlock.currentEvent.nature;
-				break;
-			
-			// control code
-			case 1:
-				switch(value) {
-				case 0: increasedUrgency++; break;
-				case 1: increasedUrgency--; break;
-				case 2: reversedDirectionality = true; break;
-				case 3: reversedDurationType = true; break;
-				case 4: spoken = !spoken; break;
-				case 5: diversion = true; break;
-				case 6: extent += 8; break;			// extent == number of steps
-				case 7: extent += 16; break;		// extent == number of steps
-				}
-				break;
-
-			
-			case 2:
-				if(value == 0) currentInformationBlock.length = 1000;
-				else if(value <= 10) currentInformationBlock.length = value;
-				else if(value <= 15) currentInformationBlock.length = 10 + (value-10)*2;
-				else currentInformationBlock.length = 20 + (value-15)*5;
-				break;
-			
-			case 3:
-				currentInformationBlock.speed = 5*value;
-				break;
-			
-			case 4:
-			case 5:
-				currentInformationBlock.currentEvent.quantifier = value;
-				break;
-				
-			case 6:
-				SupplementaryInfo si = TMC.SUPP_INFOS.get(value);
-				if (si != null)
-					currentInformationBlock.currentEvent.suppInfo.add(si);
-				break;
-				
-			case 7:
-				startTime = value;
-				break;
-				
-			case 8:
-				stopTime = value;
-				break;
-			
-			case 9:		// additional event
-				currentInformationBlock.addEvent(value);
-				break;
-				
-			case 11:
-				//addInformationBlock();
-				// TODO the spec says we should maybe create a new information block
-				// also, a 11 may be followed only by a 6 (sup info)
-				currentInformationBlock.setDestination(value);
-				break;
-				
-			case 10:
-				currentInformationBlock.diversionRoute.add(value);
-				break;
-				
-			case 13:
-				if(currentInformationBlock.currentEvent != null) {
-					currentInformationBlock.currentEvent.sourceLocation = value;
-				}
-				break;
-				
-			case 14:
-				addInformationBlock();
-				break;
-				
-			}
-		}
-		
 		/**
 		 * Used to indicate that this message is complete. 
 		 */
@@ -2226,22 +2105,6 @@ public class AlertC extends ODA {
 		
 		private final List<Integer> diversionRoute;
 
-		public InformationBlock(Message message, int eventCode) {
-			events = new ArrayList<Event>();
-			diversionRoute = new ArrayList<Integer>();
-			this.cc = message.fcc;
-			this.ltn = message.ltn;
-			addEvent(eventCode);
-		}
-		
-		public InformationBlock(Message message) {
-			events = new ArrayList<Event>();
-			diversionRoute = new ArrayList<Integer>();
-			this.cc = message.fcc;
-			this.ltn = message.ltn;
-			this.currentEvent = null;
-		}
-		
 		public InformationBlock(Message message, ResultSet rset, MessageDbInfo dbInfo) throws SQLException {
 			events = new ArrayList<Event>();
 			diversionRoute = new ArrayList<Integer>();
@@ -2435,11 +2298,6 @@ public class AlertC extends ODA {
 			return dbId;
 		}
 
-		private void addEvent(int eventCode) {
-			this.currentEvent = new Event(eventCode);
-			events.add(this.currentEvent);		
-		}
-		
 		/**
 		 * @param destination the destination to set
 		 */
@@ -2541,19 +2399,6 @@ public class AlertC extends ODA {
 
 		private int quantifier = -1;
 		private List<SupplementaryInfo> suppInfo = new ArrayList<SupplementaryInfo>();
-
-		public Event(int eventCode) {
-			this.tmcEvent = TMC.getEvent(eventCode);
-			
-			if(this.tmcEvent== null) {
-				System.err.println("No such TMC event: " + eventCode);
-			}
-			
-			this.urgency = this.tmcEvent.urgency;
-			this.nature = this.tmcEvent.nature;
-			this.durationType = this.tmcEvent.durationType;
-		}
-		
 
 		public Event(ResultSet rset, MessageDbInfo dbInfo) throws SQLException {
 			this.dbId = rset.getInt("id");
