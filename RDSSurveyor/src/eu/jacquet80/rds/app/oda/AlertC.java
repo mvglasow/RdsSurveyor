@@ -993,7 +993,7 @@ public class AlertC extends ODA {
 				nature = this.informationBlocks.get(0).events.get(0).nature;
 			
 			if (reversedDurationType)
-				invertDurationType();
+				durationType = durationType.invert();
 			
 			this.complete = true;
 		}
@@ -2031,13 +2031,6 @@ public class AlertC extends ODA {
 			this.complete();
 		}
 
-		private void invertDurationType() {
-			if (this.durationType == EventDurationType.DYNAMIC)
-				this.durationType = EventDurationType.LONGER_LASTING;
-			else
-				this.durationType = EventDurationType.DYNAMIC;
-		}
-
 		private void setLocation(int location) {
 			this.location = location;
 			if (!encrypted)
@@ -2658,14 +2651,6 @@ public class AlertC extends ODA {
 				res.append("</font>");
 			}
 			return res.toString();
-		}
-
-
-		private void invertDurationType() {
-			if (this.durationType == EventDurationType.DYNAMIC)
-				this.durationType = EventDurationType.LONGER_LASTING;
-			else
-				this.durationType = EventDurationType.DYNAMIC;
 		}
 	}
 	
