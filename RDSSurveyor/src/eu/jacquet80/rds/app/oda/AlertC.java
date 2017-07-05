@@ -3046,6 +3046,7 @@ public class AlertC extends ODA {
 			this.date = null;
 			this.diversion = false;
 			this.direction = -1;
+			this.duration = 0;
 			this.durationType = null;
 			this.extent = 0;
 			this.fcc = -1;
