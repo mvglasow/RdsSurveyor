@@ -73,7 +73,7 @@ public class AlertC extends ODA {
 	 * You may wish to store this value in (or along with) your database and compare it on startup.
 	 * If the versions do not match, reinitialize your local database. 
 	 */
-	public static final int DB_VERSION = 2;
+	public static final int DB_VERSION = 1;
 	/** 
 	 * SQL statements for persistent storage of TMC messages.
 	 * 
@@ -93,7 +93,7 @@ public class AlertC extends ODA {
 		"drop table if exists %4$s;",
 		"drop table if exists %5$s;",
 		// Message
-		"create table %1$s(id integer identity primary key, direction integer, extent integer, date timestamp(0), timeZone varchar(255), cc integer, ltn integer, sid integer, interroad boolean, fcc integer, fltn integer, location integer, encrypted boolean, reversedDirectionality boolean, reversedDurationType boolean, duration integer, startTime integer, stopTime integer, increasedUrgency integer, spoken boolean, diversion boolean, updateCount integer);",
+		"create table %1$s(id integer identity primary key, direction integer, extent integer, date timestamp(0), timeZone varchar(255), cc integer, ltn integer, sid integer, interroad boolean, fcc integer, fltn integer, location integer, reversedDirectionality boolean, reversedDurationType boolean, duration integer, startTime integer, stopTime integer, increasedUrgency integer, spoken boolean, diversion boolean, updateCount integer);",
 		// Information block
 		"create table %2$s(id integer identity primary key, message integer, index integer, length integer, speed integer, destination integer, foreign key(message) references %1$s(id) on delete cascade);",
 		"create index %2$s_message_index_idx ON %2$s(message, index);",
@@ -1841,7 +1841,7 @@ public class AlertC extends ODA {
 		 */
 		public int store(MessageDbInfo dbInfo, boolean commit) throws SQLException {
 			PreparedStatement stmt = dbInfo.connection.prepareStatement(String.format(
-					"insert into %s (direction, extent, date, timeZone, cc, ltn, sid, interroad, fcc, fltn, location, encrypted, reversedDirectionality, reversedDurationType, duration, startTime, stopTime, increasedUrgency, spoken, diversion, updateCount) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+					"insert into %s (direction, extent, date, timeZone, cc, ltn, sid, interroad, fcc, fltn, location, reversedDirectionality, reversedDurationType, duration, startTime, stopTime, increasedUrgency, spoken, diversion, updateCount) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 					dbInfo.message),
 					Statement.RETURN_GENERATED_KEYS);
 			
@@ -1856,16 +1856,15 @@ public class AlertC extends ODA {
 			stmt.setInt(9, fcc);
 			stmt.setInt(10, fltn);
 			stmt.setInt(11, location);
-			stmt.setBoolean(12, encrypted);
-			stmt.setBoolean(13, reversedDirectionality);
-			stmt.setBoolean(14, reversedDurationType);
-			stmt.setInt(15, duration);
-			stmt.setInt(16, startTime);
-			stmt.setInt(17,  stopTime);
-			stmt.setInt(18, increasedUrgency);
-			stmt.setBoolean(19, spoken);
-			stmt.setBoolean(20, diversion);
-			stmt.setInt(21, updateCount);
+			stmt.setBoolean(12, reversedDirectionality);
+			stmt.setBoolean(13, reversedDurationType);
+			stmt.setInt(14, duration);
+			stmt.setInt(15, startTime);
+			stmt.setInt(16,  stopTime);
+			stmt.setInt(17, increasedUrgency);
+			stmt.setBoolean(18, spoken);
+			stmt.setBoolean(19, diversion);
+			stmt.setInt(20, updateCount);
 			
 			int rows = stmt.executeUpdate();
 			if (rows == 0)
@@ -1918,7 +1917,6 @@ public class AlertC extends ODA {
 			this.fcc = rset.getInt("fcc");
 			this.fltn = rset.getInt("fltn");
 			this.setLocation(rset.getInt("location"));
-			this.encrypted = rset.getBoolean("encrypted");
 			this.reversedDirectionality = rset.getBoolean("reversedDirectionality");
 			// bidirectional is set by complete()
 			// coords and auxCoords are just cached values which are set when first queried
