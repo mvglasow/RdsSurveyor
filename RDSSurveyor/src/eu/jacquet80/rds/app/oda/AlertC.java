@@ -157,7 +157,6 @@ public class AlertC extends ODA {
 						dbInfo.diversion);
 				PreparedStatement stmt = dbInfo.connection.prepareStatement(stmtFmt);
 				stmt.execute();
-				stmt.close();
 				dbInfo.connection.commit();
 			} catch (SQLException e) {
 				e.printStackTrace(System.err);
@@ -734,9 +733,7 @@ public class AlertC extends ODA {
 		 * {@link ResultSet#next()} and call {@link #Message(ResultSet, MessageDbInfo)} for each
 		 * record returned.
 		 * 
-		 * The caller must close the {@code ResultSet} when it is done with it.
-		 * 
-		 * Note that, if autocommit is not enabled on the connection, the caller must also call
+		 * Note that, if autocommit is not enabled on the connection, the caller must call
 		 * {@link Connection#commit()} on the connection when it has finished processing the result.
 		 * 
 		 * @param dbInfo Describes the database in which the messages are stored
@@ -748,7 +745,6 @@ public class AlertC extends ODA {
 		public static ResultSet getAllFromDb(MessageDbInfo dbInfo) throws SQLException {
 			PreparedStatement stmt = dbInfo.connection.prepareStatement(String.format("select * from %s", dbInfo.message));
 			ResultSet rset = stmt.executeQuery();
-			stmt.closeOnCompletion();
 			return rset;
 		}
 		
@@ -789,8 +785,6 @@ public class AlertC extends ODA {
 				init(rset, dbInfo);
 			} else
 				throw new IllegalArgumentException("Object not found in database");
-			rset.close();
-			stmt.close();
 			if (!dbInfo.connection.getAutoCommit())
 				dbInfo.connection.commit();
 		}
@@ -929,7 +923,6 @@ public class AlertC extends ODA {
 			PreparedStatement stmt = dbInfo.connection.prepareStatement(String.format("delete from %s where id = ?", dbInfo.message));
 			stmt.setInt(1, dbId);
 			stmt.execute();
-			stmt.close();
 			if (commit && !dbInfo.connection.getAutoCommit())
 				dbInfo.connection.commit();
 		}
@@ -1871,8 +1864,6 @@ public class AlertC extends ODA {
 				dbId = keys.getInt(1);
 			else
 				throw new SQLException("Failed to obtain ID for newly inserted Message");
-			keys.close();
-			stmt.close();
 			
 			int i = 0;
 			for (InformationBlock ib : informationBlocks)
@@ -1935,8 +1926,6 @@ public class AlertC extends ODA {
 			}
 			if (currentInformationBlock == null)
 				throw new IllegalArgumentException("No information blocks for message found in database");
-			rsetI.close();
-			stmt.close();
 			
 			this.complete();
 		}
@@ -2123,8 +2112,6 @@ public class AlertC extends ODA {
 			}
 			if (currentEvent == null)
 				throw new IllegalArgumentException("No events for information block not found in database");
-			rsetE.close();
-			stmtE.close();
 			
 			/* get diversion entries */
 			PreparedStatement stmtD = dbInfo.connection.prepareStatement(String.format("select * from %s where informationBlock = ? order by index", dbInfo.diversion));
@@ -2134,8 +2121,6 @@ public class AlertC extends ODA {
 				int divId = rsetD.getInt("location");
 				diversionRoute.add(divId);
 			}
-			rsetD.close();
-			stmtD.close();
 		}
 		
 		/**
@@ -2280,8 +2265,6 @@ public class AlertC extends ODA {
 				dbId = keys.getInt(1);
 			else
 				throw new SQLException("Failed to obtain ID for newly inserted InformationBlock");
-			keys.close();
-			stmt.close();
 			
 			/* store events */
 			int i = 0;
@@ -2309,8 +2292,6 @@ public class AlertC extends ODA {
 					dbId = keysD.getInt(1);
 				else
 					throw new SQLException("Failed to obtain ID for newly inserted Diversion");
-				keysD.close();
-				stmtD.close();
 			}
 			
 			return dbId;
@@ -2434,8 +2415,6 @@ public class AlertC extends ODA {
 			while (rsetSi.next()) {
 				suppInfo.add(TMC.SUPP_INFOS.get(rsetSi.getInt("code")));
 			}
-			rsetSi.close();
-			stmtSi.close();
 		}
 		
 		/**
@@ -2536,8 +2515,6 @@ public class AlertC extends ODA {
 				dbId = keys.getInt(1);
 			else
 				throw new SQLException("Failed to obtain ID for newly inserted Event");
-			keys.close();
-			stmt.close();
 			
 			/* store SupplementaryInfo */
 			int i = 0;
@@ -2560,8 +2537,6 @@ public class AlertC extends ODA {
 					dbId = keysSi.getInt(1);
 				else
 					throw new SQLException("Failed to obtain ID for newly inserted SupplementaryInfo");
-				keysSi.close();
-				stmtSi.close();
 			}
 			
 			return dbId;
