@@ -748,11 +748,7 @@ public class AlertC extends ODA {
 		public static ResultSet getAllFromDb(MessageDbInfo dbInfo) throws SQLException {
 			PreparedStatement stmt = dbInfo.connection.prepareStatement(String.format("select * from %s", dbInfo.message));
 			ResultSet rset = stmt.executeQuery();
-			try {
-				stmt.closeOnCompletion();
-			} catch (NoSuchMethodError e) {
-				// TODO this may not be supported on some platforms (Android or JDK pre 1.7)
-			}
+			stmt.closeOnCompletion();
 			return rset;
 		}
 		
