@@ -26,12 +26,6 @@
 package eu.jacquet80.rds.app.oda;
 
 import java.io.PrintWriter;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
-import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
@@ -67,46 +61,6 @@ public class AlertC extends ODA {
 	private static int[] codesTw = {1, 2, 4, 8};
 	private static int[] codesGap = {3, 5, 8, 11};
 	
-	/** 
-	 * DB schema version for persistent storage, incremented every time the schema changes.
-	 * 
-	 * You may wish to store this value in (or along with) your database and compare it on startup.
-	 * If the versions do not match, reinitialize your local database. 
-	 */
-	private static final int dbVersion = 1;
-	/** 
-	 * SQL statements for persistent storage of TMC messages.
-	 * 
-	 * These are format strings into which table names must be inserted in the following order:
-	 * Message, InformationBlock, Event, SupplementaryInformation, Diversion
-	 */
-	private static final String[] dbInitStmts = {
-		// Table names inserted as parameters: Message (%1$s), InformationBlock (%2$s), Event (%3$s), SupplementaryInformation (%4$s), Diversion (%5$s)
-		// Drop existing tables and indices
-		"drop index if exists %2$s_message_index_idx;",
-		"drop index if exists %3$s_informationBlock_index_idx;",
-		"drop index if exists %4$s_event_index_idx;",
-		"drop index if exists %5$s_informationBlock_index_idx;",
-		"drop table if exists %1$s;",
-		"drop table if exists %2$s;",
-		"drop table if exists %3$s;",
-		"drop table if exists %4$s;",
-		"drop table if exists %5$s;",
-		// Message
-		"create table %1$s(id integer identity primary key, direction integer, extent integer, date timestamp(0), timeZone varchar(255), cc integer, ltn integer, sid integer, interroad boolean, fcc integer, fltn integer, location integer, reversedDirectionality boolean, reversedDurationType boolean, duration integer, startTime integer, stopTime integer, increasedUrgency integer, spoken boolean, diversion boolean, updateCount integer);",
-		// Information block
-		"create table %2$s(id integer identity primary key, message integer, index integer, length integer, speed integer, destination integer, foreign key(message) references %1$s(id) on delete cascade);",
-		"create index %2$s_message_index_idx ON %2$s(message, index);",
-		// Event
-		"create table %3$s(id integer identity primary key, informationBlock integer, index integer, code integer, urgency varchar(7), nature varchar(8), durationType varchar(14), sourceLocation integer, quantifier integer, foreign key(informationBlock) references %2$s(id) on delete cascade);",
-		"create index %3$s_informationBlock_index_idx ON %3$s(informationBlock, index);",
-		// Supplementary Information
-		"create table %4$s(id integer identity primary key, event integer, index integer, code integer, foreign key(event) references %3$s(id) on delete cascade);",
-		"create index %4$s_event_index_idx ON %4$s(event, index);",
-		// Diversion
-		"create table %5$s(id integer identity primary key, informationBlock integer, index integer, location integer, foreign key(informationBlock) references %2$s(id) on delete cascade);",
-		"create index %5$s_informationBlock_index_idx ON %5$s(informationBlock, index);",
-	};
 	// provider name
 	private String[] providerName = {"????", "????"};
 	
@@ -133,41 +87,9 @@ public class AlertC extends ODA {
 	
 	private Set<String> onInfo = new HashSet<String>();
 	
-	/**
-	 * @brief Initializes a database for persistent storage of TMC messages.
-	 * 
-	 * Any existing tables whose name matches any of the names specified in {@code dbInfo} will be
-	 * dropped and recreated. Other system objects, such as indices, with names derived from the
-	 * table names, will also be dropped and recreated. It is therefore recommended to avoid using
-	 * these table names as part of system object names outside the schema created by this method.
-	 * 
-	 * This mechanism can also be used to upgrade a database after a schema change. Note that this
-	 * will purge any stored TMC messages.
-	 * 
-	 * @param dbInfo Specifies the JDBC connection and table names to use
-	 */
-	public static void initDb(MessageDbInfo dbInfo) {
-		for (String stmtRaw: dbInitStmts) {
-			try {
-				String stmtFmt = String.format(stmtRaw,
-						dbInfo.message,
-						dbInfo.informationBlock,
-						dbInfo.event,
-						dbInfo.supplementaryInfo,
-						dbInfo.diversion);
-				PreparedStatement stmt = dbInfo.connection.prepareStatement(stmtFmt);
-				stmt.execute();
-				dbInfo.connection.commit();
-			} catch (SQLException e) {
-				e.printStackTrace(System.err);
-				return;
-			}
-		}
-	}
-
 	public AlertC() {
 	}
-	
+
 	@Override
 	public void receiveGroup(PrintWriter console, int type, int version, int[] blocks, boolean[] blocksOk, RDSTime time) {
 		boolean messageJustCompleted = false;
@@ -643,12 +565,9 @@ public class AlertC extends ODA {
 		 */
 		public static final int LOCATION_INDEPENDENT = 65535;
 		
-		/** Primary key for persistent storage, -1 if no corresponding DB record exists */
-		private int dbId = -1;
-		
 		// basic information
 		/** Direction of queue growth (0 for positive, 1 for negative). */
-		private int direction;
+		private final int direction;
 		/** The geographic extent of the event, expressed as a number of steps from 0 to 31. */
 		public int extent;
 		// extent, affected by 1.6 and 1.7   (= number of steps, see ISO 81419-1, par. 5.5.2 a: 31 steps max
@@ -725,29 +644,6 @@ public class AlertC extends ODA {
 		
 		public final static int[] labelSizes = {3, 3, 5, 5, 5, 8, 8, 8, 8, 11, 16, 16, 16, 16, 0, 0};
 		
-		/**
-		 * @brief Returns a {@link ResultSet} of all records currently in the database
-		 * 
-		 * This method is useful for bulk creation of {@code Message} objects from an underlying
-		 * database: obtain a result set with this method, then walk through it with
-		 * {@link ResultSet#next()} and call {@link #Message(ResultSet, MessageDbInfo)} for each
-		 * record returned.
-		 * 
-		 * Note that, if autocommit is not enabled on the connection, the caller must call
-		 * {@link Connection#commit()} on the connection when it has finished processing the result.
-		 * 
-		 * @param dbInfo Describes the database in which the messages are stored
-		 * 
-		 * @return The messages
-		 * 
-		 * @throws SQLException
-		 */
-		public static ResultSet getAllFromDb(MessageDbInfo dbInfo) throws SQLException {
-			PreparedStatement stmt = dbInfo.connection.prepareStatement(String.format("select * from %s", dbInfo.message));
-			ResultSet rset = stmt.executeQuery();
-			return rset;
-		}
-		
 		private String formatTime(int time) {
 			if(time >= 0 && time <= 95) {
 				return String.format("%02d:%02d", time / 4, (time % 4) * 15);
@@ -760,54 +656,6 @@ public class AlertC extends ODA {
 			} else {
 				return "INVALID";
 			}
-		}
-		
-		/**
-		 * @brief Creates a TMC/ALERT-C message from persistent storage.
-		 * 
-		 * This method will commit after the object is created, releasing any locks acquired during
-		 * the operation. If this is undesirable (e.g. when creating objects in bulk), it is
-		 * recommended to use {@link #getAllFromDb(MessageDbInfo)} in conjunction with
-		 * {@link #Message(ResultSet, MessageDbInfo)} instead and explicitly commit after the last
-		 * operation. This only applies if autocommit is disabled on the connection.
-		 * 
-		 * @param dbInfo Describes the database in which the message is stored
-		 * @param dbId The ID field of the message in the database
-		 * 
-		 * @throws IllegalArgumentException if no record with the supplied ID was found in the database
-		 * @throws SQLException 
-		 */
-		public Message(MessageDbInfo dbInfo, int dbId) throws SQLException {
-			PreparedStatement stmt = dbInfo.connection.prepareStatement(String.format("select * from %s where id = ?", dbInfo.message));
-			stmt.setInt(1, dbId);
-			ResultSet rset = stmt.executeQuery();
-			if (rset.next()) {
-				init(rset, dbInfo);
-			} else
-				throw new IllegalArgumentException("Object not found in database");
-			if (!dbInfo.connection.getAutoCommit())
-				dbInfo.connection.commit();
-		}
-		
-		/**
-		 * @brief Creates a TMC/ALERT-C message from a given record in persistent storage.
-		 * 
-		 * This constructor is the preferred form for bulk retrieval from the database.
-		 * 
-		 * It expects one argument, {@code rset}, which must be a result set obtained
-		 * by querying the Message table. Prior to calling the constructor, the cursor for
-		 * {@code rset} must be set. The constructor will use the data from the record which the
-		 * cursor points to.
-		 * 
-		 * Note that, if autocommit is not enabled on the connection, the caller must call
-		 * {@link Connection#commit()} on the connection after creating the last object.
-		 * 
-		 * @param rset The result set
-		 * @param dbInfo Describes the database in which the message is stored.
-		 * @throws SQLException
-		 */
-		public Message(ResultSet rset, MessageDbInfo dbInfo) throws SQLException {
-			init(rset, dbInfo);
 		}
 		
 		private Message(Date date, TimeZone tz, int cc, int ltn, int sid,
@@ -902,29 +750,6 @@ public class AlertC extends ODA {
 				durationType = durationType.invert();
 			
 			this.complete = true;
-		}
-		
-		/**
-		 * @brief Deletes this message from persistent storage
-		 * 
-		 * The {@code commit} argument has no effect if autocommit is enabled on the connection.
-		 * 
-		 * If autocommit is not enabled on the connection, the caller must either set {@code commit}
-		 * to {@code true} or manually call {@link Connection#commit()} after this method returns.
-		 * Multiple subsequent calls to this method can be made without committing. This can be
-		 * useful for deleting multiple messages in bulk.
-		 * 
-		 * @param dbInfo Describes the database in which the message is stored
-		 * @param commit Whether to commit after the operation, see above
-		 * 
-		 * @throws SQLException 
-		 */
-		public void delete(MessageDbInfo dbInfo, boolean commit) throws SQLException {
-			PreparedStatement stmt = dbInfo.connection.prepareStatement(String.format("delete from %s where id = ?", dbInfo.message));
-			stmt.setInt(1, dbId);
-			stmt.execute();
-			if (commit && !dbInfo.connection.getAutoCommit())
-				dbInfo.connection.commit();
 		}
 		
 		/**
@@ -1810,126 +1635,6 @@ public class AlertC extends ODA {
 				throw new IllegalArgumentException("LTN and SID cannot be changed after being set");
 		}
 
-		/*
-		 * @brief Writes a TMC/ALERT-C message to persistent storage.
-		 * 
-		 * 
-		 * The {@code commit} argument has no effect if autocommit is enabled on the connection.
-		 * 
-		 * If autocommit is not enabled on the connection, the caller must either set {@code commit}
-		 * to {@code true} or manually call {@link Connection#commit()} after this method returns.
-		 * Multiple subsequent calls to this method can be made without committing. This can be
-		 * useful for storing multiple messages in bulk.
-		 * 
-		 * @param dbInfo Describes the database in which the message is stored
-		 * @param commit Whether to commit after the operation, see above
-		 * 
-		 * @return The ID of the message in the database.
-		 * 
-		 * @throws SQLException 
-		 */
-		public int store(MessageDbInfo dbInfo, boolean commit) throws SQLException {
-			PreparedStatement stmt = dbInfo.connection.prepareStatement(String.format(
-					"insert into %s (direction, extent, date, timeZone, cc, ltn, sid, interroad, fcc, fltn, location, reversedDirectionality, reversedDurationType, duration, startTime, stopTime, increasedUrgency, spoken, diversion, updateCount) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-					dbInfo.message),
-					Statement.RETURN_GENERATED_KEYS);
-			
-			stmt.setInt(1, direction);
-			stmt.setInt(2, extent);
-			stmt.setTimestamp(3, new Timestamp(date.getTime()));
-			stmt.setString(4, timeZone.getID());
-			stmt.setInt(5, cc);
-			stmt.setInt(6, ltn);
-			stmt.setInt(7, sid);
-			stmt.setBoolean(8, interroad);
-			stmt.setInt(9, fcc);
-			stmt.setInt(10, fltn);
-			stmt.setInt(11, location);
-			stmt.setBoolean(12, reversedDirectionality);
-			stmt.setBoolean(13, reversedDurationType);
-			stmt.setInt(14, duration);
-			stmt.setInt(15, startTime);
-			stmt.setInt(16,  stopTime);
-			stmt.setInt(17, increasedUrgency);
-			stmt.setBoolean(18, spoken);
-			stmt.setBoolean(19, diversion);
-			stmt.setInt(20, updateCount);
-			
-			int rows = stmt.executeUpdate();
-			if (rows == 0)
-				throw new SQLException("Insert Message failed");
-			
-			ResultSet keys = stmt.getGeneratedKeys();
-			if (keys.next())
-				dbId = keys.getInt(1);
-			else
-				throw new SQLException("Failed to obtain ID for newly inserted Message");
-			
-			int i = 0;
-			for (InformationBlock ib : informationBlocks)
-				ib.store(dbInfo, dbId, i);
-			
-			if (commit && !dbInfo.connection.getAutoCommit())
-				dbInfo.connection.commit();
-			
-			return dbId;
-		}
-		
-		/**
-		 * @brief Initializes a TMC/ALERT-C message from a given record in persistent storage.
-		 * 
-		 * This method is intended to be called from the constructor (it is essentially a
-		 * workaround for the constraint that Java does not permit other statements before
-		 * constructor calls, which prevents calling {@link #Message(ResultSet)} from
-		 * {@link #Message(MessageDbInfo, int)}.
-		 * 
-		 * It expects one argument, {@code rset}, which must be a result set obtained by querying
-		 * the Message table. Prior to calling this method, the cursor for {@code rset} must be
-		 * set. This method will use the data from the record which the cursor points to.
-		 * 
-		 * @param rset The result set
-		 * @param dbInfo Describes the database in which the message is stored
-		 * @throws SQLException
-		 */
-		private void init(ResultSet rset, MessageDbInfo dbInfo) throws SQLException {
-			this.dbId = rset.getInt("id");
-			this.direction = rset.getInt("direction");
-			this.extent = rset.getInt("extent");
-			this.date = new Date(rset.getTimestamp("date").getTime());
-			this.timeZone = TimeZone.getTimeZone(rset.getString("timeZone"));
-			this.cc = rset.getInt("cc");
-			this.ltn = rset.getInt("ltn");
-			this.sid = rset.getInt("sid");
-			this.interroad = rset.getBoolean("interroad");
-			this.fcc = rset.getInt("fcc");
-			this.fltn = rset.getInt("fltn");
-			this.setLocation(rset.getInt("location"));
-			this.reversedDirectionality = rset.getBoolean("reversedDirectionality");
-			// bidirectional is set by complete()
-			// coords and auxCoords are just cached values which are set when first queried
-			this.reversedDurationType = rset.getBoolean("reversedDurationType");
-			this.duration = rset.getInt("duration");
-			this.startTime = rset.getInt("startTime");
-			this.stopTime = rset.getInt("stopTime");
-			this.increasedUrgency = rset.getInt("increasedUrgency");
-			// urgency is set by complete()
-			this.spoken = rset.getBoolean("spoken");
-			this.diversion = rset.getBoolean("diversion");
-			this.updateCount = rset.getInt("updateCount");
-			
-			PreparedStatement stmt = dbInfo.connection.prepareStatement(String.format("select * from %s where message = ? order by index", dbInfo.informationBlock));
-			stmt.setInt(1, dbId);
-			ResultSet rsetI = stmt.executeQuery();
-			while (rsetI.next()) {
-				this.currentInformationBlock = new InformationBlock(this, rsetI, dbInfo);
-				this.informationBlocks.add(currentInformationBlock);
-			}
-			if (currentInformationBlock == null)
-				throw new IllegalArgumentException("No information blocks for message found in database");
-			
-			this.complete();
-		}
-
 		private void setLocation(int location) {
 			this.location = location;
 			if (!encrypted)
@@ -2074,9 +1779,6 @@ public class AlertC extends ODA {
 
 	
 	public static class InformationBlock {
-		/** Primary key for persistent storage, -1 if no corresponding DB record exists */
-		private int dbId = -1;
-		
 		/** The country code to be used in decoding the diversion route locations. */
 		private int cc;
 		/** The Location Table Number (LTN) to be used in decoding the diversion route locations. */
@@ -2092,37 +1794,6 @@ public class AlertC extends ODA {
 		
 		private final List<Integer> diversionRoute;
 
-		public InformationBlock(Message message, ResultSet rset, MessageDbInfo dbInfo) throws SQLException {
-			events = new ArrayList<Event>();
-			diversionRoute = new ArrayList<Integer>();
-			this.cc = message.fcc;
-			this.ltn = message.ltn;
-			this.dbId = rset.getInt("id");
-			this.length = rset.getInt("length");
-			this.speed = rset.getInt("speed");
-			this.setDestination(rset.getInt("destination"));
-			
-			/* get events */
-			PreparedStatement stmtE = dbInfo.connection.prepareStatement(String.format("select * from %s where informationBlock = ? order by index", dbInfo.event));
-			stmtE.setInt(1, dbId);
-			ResultSet rsetE = stmtE.executeQuery();
-			while (rsetE.next()) {
-				this.currentEvent = new Event(rsetE, dbInfo);
-				events.add(this.currentEvent);
-			}
-			if (currentEvent == null)
-				throw new IllegalArgumentException("No events for information block not found in database");
-			
-			/* get diversion entries */
-			PreparedStatement stmtD = dbInfo.connection.prepareStatement(String.format("select * from %s where informationBlock = ? order by index", dbInfo.diversion));
-			stmtD.setInt(1, dbId);
-			ResultSet rsetD = stmtD.executeQuery();
-			while (rsetD.next()) {
-				int divId = rsetD.getInt("location");
-				diversionRoute.add(divId);
-			}
-		}
-		
 		/**
 		 * @brief Constructs an information block with the given parameters.
 		 * 
@@ -2234,70 +1905,6 @@ public class AlertC extends ODA {
 		}
 		
 		/**
-		 * @brief Writes an information block to persistent storage.
-		 * 
-		 * @param dbInfo Describes the database in which the information block is stored
-		 * @param message The database ID of the parent message
-		 * @param index The zero-based index of the information block within the message
-		 * 
-		 * @return The ID of the information block in the database
-		 * 
-		 * @throws SQLException 
-		 */
-		public int store(MessageDbInfo dbInfo, int message, int index) throws SQLException {
-			PreparedStatement stmt = dbInfo.connection.prepareStatement(String.format(
-					"insert into %s (message, index, length, speed, destination) values(?, ?, ?, ?, ?)",
-					dbInfo.informationBlock),
-					Statement.RETURN_GENERATED_KEYS);
-			
-			stmt.setInt(1, message);
-			stmt.setInt(2, index);
-			stmt.setInt(3, length);
-			stmt.setInt(4, speed);
-			stmt.setInt(5, destination);
-			
-			int rows = stmt.executeUpdate();
-			if (rows == 0)
-				throw new SQLException("Insert InformationBlock failed");
-			
-			ResultSet keys = stmt.getGeneratedKeys();
-			if (keys.next())
-				dbId = keys.getInt(1);
-			else
-				throw new SQLException("Failed to obtain ID for newly inserted InformationBlock");
-			
-			/* store events */
-			int i = 0;
-			for (Event e : events)
-				e.store(dbInfo, dbId, i);
-			
-			/* store diversions */
-			i = 0;
-			for (Integer div : diversionRoute) {
-				PreparedStatement stmtD = dbInfo.connection.prepareStatement(String.format(
-						"insert into %s (informationBlock, index, location) values(?, ?, ?)",
-						dbInfo.diversion),
-						Statement.RETURN_GENERATED_KEYS);
-				
-				stmtD.setInt(1, dbId);
-				stmtD.setInt(2, i);
-				stmtD.setInt(3, div);
-				
-				int rowsD = stmtD.executeUpdate();
-				if (rowsD == 0)
-					throw new SQLException("Insert Diversion failed");
-				
-				ResultSet keysD = stmtD.getGeneratedKeys();
-				if (keysD.next())
-					dbId = keysD.getInt(1);
-				else
-					throw new SQLException("Failed to obtain ID for newly inserted Diversion");
-			}
-			
-			return dbId;
-		}
-
-		/**
 		 * @param destination the destination to set
 		 */
 		private void setDestination(int destination) {
@@ -2382,9 +1989,6 @@ public class AlertC extends ODA {
 	}
 	
 	public static class Event {
-		/** Primary key for persistent storage, -1 if no corresponding DB record exists */
-		private int dbId = -1;
-		
 		/** The country code to be used in decoding the source location. */
 		private int cc;
 		/** The Location Table Number (LTN) to be used in decoding the source location. */
@@ -2399,24 +2003,6 @@ public class AlertC extends ODA {
 		public final int quantifier;
 		private List<SupplementaryInfo> suppInfo = new ArrayList<SupplementaryInfo>();
 
-		public Event(ResultSet rset, MessageDbInfo dbInfo) throws SQLException {
-			this.dbId = rset.getInt("id");
-			this.tmcEvent = TMC.getEvent(rset.getInt("code"));
-			this.urgency = TMCEvent.EventUrgency.valueOf(rset.getString("urgency"));
-			this.nature = TMCEvent.EventNature.valueOf(rset.getString("nature"));
-			this.durationType = TMCEvent.EventDurationType.valueOf(rset.getString("durationType"));
-			this.sourceLocation = rset.getInt("sourceLocation");
-			this.quantifier = rset.getInt("quantifier");
-			
-			/* get supplementary information */
-			PreparedStatement stmtSi = dbInfo.connection.prepareStatement(String.format("select * from %s where event = ? order by index", dbInfo.supplementaryInfo));
-			stmtSi.setInt(1, dbId);
-			ResultSet rsetSi = stmtSi.executeQuery();
-			while (rsetSi.next()) {
-				suppInfo.add(TMC.SUPP_INFOS.get(rsetSi.getInt("code")));
-			}
-		}
-		
 		/**
 		 * @brief Constructs an event with the given parameters.
 		 * 
@@ -2477,69 +2063,6 @@ public class AlertC extends ODA {
 				text = tmcEvent.text;
 			}
 			return text;
-		}
-
-
-		/**
-		 * @brief Writes an event to persistent storage.
-		 * 
-		 * @param dbInfo Describes the database in which the event is stored
-		 * @param informationBlock The database ID of the parent information block
-		 * @param index The zero-based index of the event within the information block
-		 * 
-		 * @return The ID of the event in the database.
-		 * 
-		 * @throws SQLException 
-		 */
-		public int store(MessageDbInfo dbInfo, int informationBlock, int index) throws SQLException {
-			PreparedStatement stmt = dbInfo.connection.prepareStatement(String.format(
-					"insert into %s (informationBlock, index, code, urgency, nature, durationType, sourceLocation, quantifier) values(?, ?, ?, ?, ?, ?, ?, ?)",
-					dbInfo.event),
-					Statement.RETURN_GENERATED_KEYS);
-			
-			stmt.setInt(1, informationBlock);
-			stmt.setInt(2, index);
-			stmt.setInt(3, tmcEvent.code);
-			stmt.setString(4, urgency.name());
-			stmt.setString(5, nature.name());
-			stmt.setString(6, durationType.name());
-			stmt.setInt(7, sourceLocation);
-			stmt.setInt(8, quantifier);
-			
-			int rows = stmt.executeUpdate();
-			if (rows == 0)
-				throw new SQLException("Insert Event failed");
-			
-			ResultSet keys = stmt.getGeneratedKeys();
-			if (keys.next())
-				dbId = keys.getInt(1);
-			else
-				throw new SQLException("Failed to obtain ID for newly inserted Event");
-			
-			/* store SupplementaryInfo */
-			int i = 0;
-			for (SupplementaryInfo si : suppInfo) {
-				PreparedStatement stmtSi = dbInfo.connection.prepareStatement(String.format(
-						"insert into %s (event, index, code) values(?, ?, ?)",
-						dbInfo.supplementaryInfo),
-						Statement.RETURN_GENERATED_KEYS);
-				
-				stmtSi.setInt(1, dbId);
-				stmtSi.setInt(2, i);
-				stmtSi.setInt(3, si.code);
-				
-				int rowsSi = stmtSi.executeUpdate();
-				if (rowsSi == 0)
-					throw new SQLException("Insert SupplementaryInfo failed");
-				
-				ResultSet keysSi = stmtSi.getGeneratedKeys();
-				if (keysSi.next())
-					dbId = keysSi.getInt(1);
-				else
-					throw new SQLException("Failed to obtain ID for newly inserted SupplementaryInfo");
-			}
-			
-			return dbId;
 		}
 
 
@@ -2625,39 +2148,6 @@ public class AlertC extends ODA {
 			
 			/* Finally compare by extent */
 			return lhs.extent - rhs.extent;
-		}
-	}
-	
-	/**
-	 * Describes the database used for persistent storage of TMC messages.
-	 * 
-	 * When an instance of this class is created, its table name members have default values. You
-	 * can change them as you wish. Bear in mind that input is not sanitized, thus be sure to
-	 * either set these variables in a way that you control their content (as with a fixed string)
-	 * or sanitize it.
-	 */
-	public static class MessageDbInfo {
-		/** The database connection. */
-		public Connection connection;
-		/** The name of the table in which TMC messages are stored. */
-		public String message = "Message";
-		/** The name of the table in which information blocks of TMC messages are stored. */
-		public String informationBlock = "InformationBlock";
-		/** The name of the table in which the events of each TMC information block are stored. */
-		public String event = "Event";
-		/** The name of the table in which supplementary info for TMC events is stored. */
-		public String supplementaryInfo = "SupplementaryInfo";
-		/** The name of the table in which diversion routes for TMC information blocks are stored. */
-		public String diversion = "Diversion";
-		
-		/**
-		 * @brief Creates a new {@code MessageDbInfo} instance.
-		 * 
-		 * @param connection A JDBC connection to the database in which messages are to be stored.
-		 * Only HyperSQL is fully supported as a DBMS. Use other DBMSes at your own risk.
-		 */
-		public MessageDbInfo(Connection connection) {
-			this.connection = connection;
 		}
 	}
 
