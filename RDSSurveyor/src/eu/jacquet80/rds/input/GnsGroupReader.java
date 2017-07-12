@@ -67,11 +67,17 @@ import eu.jacquet80.rds.log.RealTime;
  * data and accept only valid response sentences.
  */
 public class GnsGroupReader extends TunerGroupReader {
+	/** Unknown command set */
+	private static final int CMD_SET_UNKNOWN = -1;
+
 	/** FM9 command set */
 	private static final int CMD_SET_FM9 = 0;
 
 	/** 9830 command set */
 	private static final int CMD_SET_9830 = 1;
+
+	/** Command set names */
+	private static final String[] CMD_SET_NAMES = {"TrafficBox FM9 family", "9830 (and related)"};
 
 	/** Delimiter for commands */
 	private static final int DELIM_COMMAND = 0xFF;
@@ -79,14 +85,17 @@ public class GnsGroupReader extends TunerGroupReader {
 	/** Delimiter for responses */
 	private static final int DELIM_RESPONSE = 0x3F;
 
-	/** Opcode to disable the device. */
-	private static final int[] OPCODE_DISABLE = {0x53, 0x53};
+	/** The display name for the device. */
+	private static final String DEVICE_NAME = "GNS";
 
-	/** Opcode to enable the device. */
-	private static final int[] OPCODE_ENABLE = {0x56, 0x56};
+	/** Opcode to disable the device (same for all command sets). */
+	private static final int OPCODE_DISABLE = 0x53;
 
-	/** Opcode to request an identification string. */
-	private static final int[] OPCODE_IDENTIFICATION = {0x43, 0x43};
+	/** Opcode to enable the device (same for all command sets). */
+	private static final int OPCODE_ENABLE = 0x56;
+
+	/** Opcode to request an identification string (same for all command sets). */
+	private static final int OPCODE_IDENTIFICATION = 0x43;
 
 	/** Opcode to retrieve signal strength of current station */
 	// TODO opcode for 9830 is not known
@@ -105,12 +114,15 @@ public class GnsGroupReader extends TunerGroupReader {
 	private static final int[] OPCODE_TUNE = {0x73, 0x46};
 
 	/** The command set used by this device */
-	private int cmdSet = -1;
+	private int cmdSet = CMD_SET_UNKNOWN;
 
 	private GnsData gnsData = new GnsData();
 
 	/** Stream which receives status and RDS data coming from the device */
 	private InputStream in;
+
+	/** Whether a flush operation is in progress */
+	private boolean isFlushing = true;
 
 	private boolean newGroups;
 
@@ -140,30 +152,43 @@ public class GnsGroupReader extends TunerGroupReader {
 	 * @throws UnavailableInputMethod if the device cannot be initialized
 	 */
 	public GnsGroupReader(InputStream in, OutputStream out) throws UnavailableInputMethod {
-		byte[] buffer = new byte[1024];
-
 		this.in = in;
 		this.out = out;
 
-		cmdSet = CMD_SET_FM9; // TODO detect command set
-
 		try {
-			System.out.println("\nSending disable command and flushing buffer");
+			System.out.println("Sending disable command and flushing buffer");
 			/* Disable to stop any data delivery from a previous instance */
-			sendCommand(OPCODE_DISABLE[0], 0x78, 0x78);
-			/* Discard any leftover data in the buffer */
-			while (in.read(buffer) > 0) { }
+			sendCommand(OPCODE_DISABLE, 0x78, 0x78);
 
 			responseReader = new ResponseReader();
 			responseReader.start();
 
-			System.out.println("\nSending enable command");
-			sendCommand(OPCODE_ENABLE[0], 0x78, 0x78);
+			System.out.println("Sending enable command");
+			sendCommand(OPCODE_ENABLE, 0x78, 0x78);
 
-			System.out.println("\nRequesting identification");
-			sendCommand(OPCODE_IDENTIFICATION[0], 0x00, 0x00);
+			System.out.println("Probing to determine command set");
+			/* 
+			 * The tune command is different between the two known command sets, and the opcode of
+			 * one device family is invalid on the other (this goes for the 9830 command on the
+			 * FM9, the reverse has not been tested yet). By trying both flavors and waiting for
+			 * a response to one of them, we can identify the command set used by the device.
+			 */
+			for (int i = 0; i < OPCODE_TUNE.length; i++) {
+				/* TODO somehow the first one does not always go through */
+				sendCommand(OPCODE_TUNE[i], 0x00, 0x05);
+				sendCommand(OPCODE_TUNE[i], 0x00, 0x05);
+			}
 		} catch (IOException e) {
 			throw new UnavailableInputMethod("I/O exception");
+		}
+
+		while (cmdSet == CMD_SET_UNKNOWN) {
+			try {
+				Thread.sleep(100);
+			} catch (InterruptedException e) {
+				e.printStackTrace();
+				return;
+			}
 		}
 
 		setFrequency(87500);
@@ -171,9 +196,7 @@ public class GnsGroupReader extends TunerGroupReader {
 
 	@Override
 	public String getDeviceName() {
-		synchronized(gnsData) {
-			return gnsData.deviceName;
-		}
+		return DEVICE_NAME;
 	}
 
 	@Override
@@ -299,6 +322,23 @@ public class GnsGroupReader extends TunerGroupReader {
 
 
 	/**
+	 * @brief Whether an array of bytes represents a printable string.
+	 * 
+	 * A printable string is one which contains no characters with values lower than 0x20.
+	 * 
+	 * @param data The array of bytes to examine.
+	 * 
+	 * @return True if the array holds a printable string, false if not
+	 */
+	private static boolean isPrintable(int[] data) {
+		boolean res = true;
+		for (int i = 0; i < data.length; i++)
+			res &= (data[i] >= 0x20);
+		return res;
+	}
+
+
+	/**
 	 * @brief Converts a frequency to a channel.
 	 * 
 	 * No validation of the input frequency is currently performed.
@@ -340,7 +380,7 @@ public class GnsGroupReader extends TunerGroupReader {
 	 */
 	private void sendCommand(int opcode, int aParam, int bParam) throws IOException {
 		out.write(new byte[] {(byte) DELIM_COMMAND, (byte) opcode, (byte) aParam, (byte) bParam, (byte) opcode});
-		if (opcode != OPCODE_DISABLE[cmdSet])
+		if (opcode != OPCODE_DISABLE)
 			opcodes.add(opcode);
 	}
 
@@ -353,8 +393,6 @@ public class GnsGroupReader extends TunerGroupReader {
 	 */
 	private static class GnsData {
 		private int[] blocks = {-1, -1, -1, -1};
-
-		private String deviceName = "GNS (not initialized)";
 
 		/** Frequency in kHz */
 		private int frequency;
@@ -420,7 +458,7 @@ public class GnsGroupReader extends TunerGroupReader {
 							System.err.printf(" %02X", responseData[i]);
 						System.err.print("\n");
 						int discard = 1;
-						while ((discard < 9) && ((responseData[discard] != DELIM_RESPONSE) || (responseData[discard + 1] != DELIM_RESPONSE)))
+						while ((discard < 9) && ((responseData[discard] != DELIM_RESPONSE) || (responseData[discard + 1] == DELIM_RESPONSE)))
 							discard++;
 						/* 
 						 * if we're discarding all but the last character, check if it's a
@@ -445,7 +483,32 @@ public class GnsGroupReader extends TunerGroupReader {
 
 				if ((intData[1] == 0) && (intData[2] == 0)) {
 					/* likely a status response (or an illegal PI code of 0000) */
-					if ((opcodes.contains(intData[3]) && (intData[3] == OPCODE_TUNE[cmdSet]))
+					if (opcodes.contains(intData[3]) && (intData[3] == OPCODE_ENABLE)) {
+						/* enable response, just print it and end flush mode */
+						// TODO can we use the response to identify the command set?
+						isFlushing = false;
+						System.out.printf("Enable response: GNS V%02d %02d/%02d %02X%X (%016X)\n",
+								intData[6], intData[5], intData[4], intData[7], intData[8], res);
+						continue;
+					} else if ((intData[3] == OPCODE_DISABLE) && ((res & 0xffffffffffl) == 0)) {
+						/* response to disable command, end flush mode */
+						isFlushing = false;
+						System.out.println("Disable response received");
+						continue;
+					} else if (isFlushing) {
+						/* still in flushing mode, continue */
+						continue;
+					} else if (cmdSet == CMD_SET_UNKNOWN) {
+						/* command set probing returned a result */
+						for (int i = 0; (i < OPCODE_TUNE.length) && (cmdSet == CMD_SET_UNKNOWN); i++) {
+							opcodes.remove(Integer.valueOf(intData[3]));
+							if (intData[3] == OPCODE_TUNE[i]) {
+								System.out.printf("Command set is %s\n", CMD_SET_NAMES[i]);
+								cmdSet = i;
+							}
+						}
+						continue;
+					} else if ((opcodes.contains(intData[3]) && (intData[3] == OPCODE_TUNE[cmdSet]))
 							|| (intData[3] == OPCODE_SEEK_STATUS[cmdSet])) {
 						/* frequency changed by either a seek or a tune operation */
 						synchronized(gnsData) {
@@ -458,18 +521,12 @@ public class GnsGroupReader extends TunerGroupReader {
 						continue;
 					} else if (opcodes.contains(intData[3])) {
 						/* this is the response to a previously issued command */
+						/* OPCODE_DISABLE is already handled above */
+						/* OPCODE_ENABLE is already handled above */
 						/* OPCODE_IDENTIFICATION is not repeated in the response */
 						/* OPCODE_SEEK_STATUS is not a valid command opcode */
 						/* OPCODE_TUNE is already handled above */
-						if (intData[3] == OPCODE_DISABLE[cmdSet]) {
-							/* nothing to do */
-							System.out.println("Disable response received");
-						} else if (intData[3] == OPCODE_ENABLE[cmdSet]) {
-							/* enable response, just print it */
-							// TODO can we use the response to identify the command set?
-							System.out.printf("Enable response: GNS V%02d %02d/%02d %02X%X (%016X)\n",
-									intData[6], intData[5], intData[4], intData[7], intData[8], res);
-						} else if ((intData[3] == OPCODE_SEEK_UP[cmdSet])
+						if ((intData[3] == OPCODE_SEEK_UP[cmdSet])
 								|| (intData[3] == OPCODE_SEEK_DOWN[cmdSet])) {
 							if ("ok".equals(new String(intData, 5, 2)))
 								System.out.println("Starting seek operation");
@@ -502,13 +559,13 @@ public class GnsGroupReader extends TunerGroupReader {
 						}
 						continue;
 					}
-				} else if (opcodes.contains(OPCODE_IDENTIFICATION[cmdSet])) {
+				} else if (isFlushing) {
+					/* still in flushing mode, continue */
+					continue;
+				} else if (opcodes.contains(OPCODE_IDENTIFICATION) && isPrintable(intData)) {
 					/* we requested an identification */
-					synchronized(gnsData) {
-						gnsData.deviceName = new String(responseData, 1, 8);
-						System.out.printf("Identification: %s\n", gnsData.deviceName);
-					}
-					opcodes.remove(Integer.valueOf(OPCODE_IDENTIFICATION[cmdSet]));
+					System.out.printf("Identification: %s\n", new String(responseData, 1, 8));
+					opcodes.remove(Integer.valueOf(OPCODE_IDENTIFICATION));
 					continue;
 				}
 
