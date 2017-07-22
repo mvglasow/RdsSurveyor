@@ -26,13 +26,16 @@
 
 package eu.jacquet80.rds.input;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.channels.ClosedChannelException;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 
+import eu.jacquet80.rds.input.GroupReader.EndOfStream;
 import eu.jacquet80.rds.input.group.FrequencyChangeEvent;
 import eu.jacquet80.rds.input.group.GroupEvent;
 import eu.jacquet80.rds.input.group.GroupReaderEvent;
@@ -66,7 +69,7 @@ import eu.jacquet80.rds.log.RealTime;
  * commands via an {@link InputStream}. This class has only rudimentary logic to discard invalid
  * data and accept only valid response sentences.
  */
-public class GnsGroupReader extends TunerGroupReader {
+public class GnsGroupReader extends TunerGroupReader implements Closeable {
 	/** Unknown command set */
 	private static final int CMD_SET_UNKNOWN = -1;
 
@@ -112,6 +115,9 @@ public class GnsGroupReader extends TunerGroupReader {
 
 	/** Opcode to tune to a specified frequency. */
 	private static final int[] OPCODE_TUNE = {0x73, 0x46};
+
+	/** Whether this reader has been closed. */
+	private boolean closed = false;
 
 	/** The command set used by this device */
 	private int cmdSet = CMD_SET_UNKNOWN;
@@ -194,6 +200,21 @@ public class GnsGroupReader extends TunerGroupReader {
 		setFrequency(87500);
 	}
 
+	/**
+	 * @brief Closes this GroupReader.
+	 * 
+	 * The input and output streams are left open and must be closed by the caller as needed.
+	 */
+	@Override
+	public void close() {
+		try {
+			sendCommand(OPCODE_DISABLE, 0x78, 0x78);
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		this.closed = true;
+	}
+
 	@Override
 	public String getDeviceName() {
 		return DEVICE_NAME;
@@ -207,7 +228,10 @@ public class GnsGroupReader extends TunerGroupReader {
 	}
 
 	@Override
-	public GroupReaderEvent getGroup() throws IOException {
+	public GroupReaderEvent getGroup() throws IOException, EndOfStream {
+		if (closed)
+			throw new EndOfStream();
+
 		if (System.currentTimeMillis() - lastRssiTimestamp > 1000) {
 			/* query RSSI periodically (npo more than once per second) */
 			try {
@@ -236,6 +260,9 @@ public class GnsGroupReader extends TunerGroupReader {
 
 	@Override
 	public int getSignalStrength() {
+		if (closed)
+			return 0;
+
 		synchronized(gnsData) {
 			return gnsData.rssi;
 		}
@@ -258,6 +285,8 @@ public class GnsGroupReader extends TunerGroupReader {
 
 	@Override
 	public boolean isSynchronized() {
+		if (closed)
+			return false;
 		synchronized(gnsData) {
 			return gnsData.rdsSynchronized;
 		}
@@ -270,6 +299,9 @@ public class GnsGroupReader extends TunerGroupReader {
 
 	@Override
 	public boolean newGroups() {
+		if (closed)
+			return false;
+
 		boolean ng = newGroups;
 		newGroups = false;
 		return ng;
@@ -277,6 +309,9 @@ public class GnsGroupReader extends TunerGroupReader {
 
 	@Override
 	public boolean seek(boolean up) {
+		if (closed)
+			return false;
+
 		int frequency;
 		synchronized(gnsData) {
 			frequency = gnsData.frequency;
@@ -293,6 +328,9 @@ public class GnsGroupReader extends TunerGroupReader {
 
 	@Override
 	public int setFrequency(int frequency) {
+		if (closed)
+			return -1;
+
 		try {
 			sendCommand(OPCODE_TUNE[cmdSet], getChannelFromFrequency(frequency), 0x05);
 		} catch (IOException e) {
@@ -304,6 +342,9 @@ public class GnsGroupReader extends TunerGroupReader {
 
 	@Override
 	public void tune(boolean up) {
+		if (closed)
+			return;
+
 		int freq;
 		synchronized(gnsData) {
 			freq = gnsData.frequency + (up ? 100 : -100);
@@ -379,6 +420,8 @@ public class GnsGroupReader extends TunerGroupReader {
 	 * @throws IOException
 	 */
 	private void sendCommand(int opcode, int aParam, int bParam) throws IOException {
+		if (closed)
+			throw new ClosedChannelException();
 		out.write(new byte[] {(byte) DELIM_COMMAND, (byte) opcode, (byte) aParam, (byte) bParam, (byte) opcode});
 		if (opcode != OPCODE_DISABLE)
 			opcodes.add(opcode);
@@ -415,7 +458,7 @@ public class GnsGroupReader extends TunerGroupReader {
 	private class ResponseReader extends Thread {
 		@Override
 		public void run() {
-			while (!isInterrupted()) {
+			while (!closed) {
 				long res;
 
 				/* Last response received from device */
@@ -434,7 +477,7 @@ public class GnsGroupReader extends TunerGroupReader {
 					responseData = new byte[10];
 				}
 
-				while (responseStart < 10) {
+				while ((responseStart < 10) && !closed) {
 					try {
 						while ((responseStart < 10) && ((len = in.read(responseData, responseStart, responseData.length - responseStart)) > 0)) {
 							responseStart += len;
@@ -471,6 +514,10 @@ public class GnsGroupReader extends TunerGroupReader {
 						responseStart -= discard;
 						System.err.printf("Discarded %d bytes\n", discard);
 					}
+				}
+
+				if (closed) {
+					return;
 				}
 
 				/* we now have a complete response, convert it */
